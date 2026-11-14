@@ -1,0 +1,7 @@
+# dsh-preset-menu — Agent 模式菜单的定位与排版整理
+#
+# 纯客户端插件：host 半区只有一个空 apply，实际逻辑在 client 半区
+# （监听弹窗挂载 → 计算上浮/下拉 → 限高 + 滚动 + 行内排版）。
+- insert:
+    - id: dsh-preset-menu
+      name: dsh-preset-menu
