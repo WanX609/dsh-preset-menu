@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Tidier agent-mode menu",
-    "description": "Places the agent-mode menu above or below its chip depending on the room actually available, caps its height and lets the list scroll, and tidies each row's name and description. Works on the new-session screen; does nothing when the menu's structure is not recognised.",
+    "description": "Places the agent-mode menu below its chip with a height cap that scrolls, tidies each row, and adds a Settings → Preset menu page for tuning the bottom inset, width and spacing. Does nothing when the menu structure is not recognised.",
     "detail": "docs/DETAIL.md"
   }
 }

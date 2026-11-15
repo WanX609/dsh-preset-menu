@@ -1,9 +1,9 @@
 {
   "name": "dsh-preset-menu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "把新建任务页的 Agent 模式弹窗做成真正的锚定弹层：按可用空间上浮或下拉、限高滚动，并整理每一行的排版。",
+  "description": "把新建任务页的 Agent 模式弹窗做成真正的锚定弹层：按可用空间上浮或下拉、限高滚动、整理行内排版，几何参数可在 设置 → 模式弹窗 里调。",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -32,3 +32,4 @@
     }
   }
 }
+

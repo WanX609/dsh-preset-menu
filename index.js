@@ -10,10 +10,12 @@
  * 只读、只注册一条路由，不碰任何其他 Host 服务。
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 
-/** 同源路由前缀；浏览器半区按 `${ROUTE_PREFIX}/config` 取配置。 */
+/** 同源路由前缀；浏览器半区按 `${ROUTE_PREFIX}/config` 取/存配置。 */
 const ROUTE_PREFIX = '/dsh-preset-menu'
+/** 配置文件相对本模块的位置。 */
+const CONFIG_PATH = './preset-menu.json'
 /** 配置文件与默认值：数字都能被外部改写，范围只做兜底。 */
 const DEFAULTS = Object.freeze({
   /** 面板底边与窗口下沿的留白：越小，向下伸得越低。 */
@@ -53,15 +55,36 @@ function clampField(name, value) {
 async function readTuning() {
   let raw = {}
   try {
-    const text = await readFile(new URL('./preset-menu.json', import.meta.url), 'utf8')
+    const text = await readFile(new URL(CONFIG_PATH, import.meta.url), 'utf8')
     const parsed = JSON.parse(text)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) raw = parsed
   } catch {
     // 文件不存在或不是合法 JSON：整体退回默认值。
     raw = {}
   }
+  return normalize(raw)
+}
+
+/**
+ * 把外部输入收敛成完整、合法的配置。
+ * @param raw - 来自文件或请求体的原始对象。
+ * @returns 四项都合法的配置。
+ */
+function normalize(raw) {
   const tuning = {}
-  for (const name of Object.keys(DEFAULTS)) tuning[name] = clampField(name, raw[name] ?? DEFAULTS[name])
+  for (const name of Object.keys(DEFAULTS)) tuning[name] = clampField(name, raw?.[name] ?? DEFAULTS[name])
+  return tuning
+}
+
+/**
+ * 写回配置文件；设置页保存走这里。
+ * @param raw - 请求体。
+ * @returns 夹紧之后真正落盘的值。
+ */
+async function writeTuning(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('请求体必须是对象')
+  const tuning = normalize(raw)
+  await writeFile(new URL(CONFIG_PATH, import.meta.url), `${JSON.stringify(tuning, null, 2)}\n`, 'utf8')
   return tuning
 }
 
@@ -69,7 +92,40 @@ async function readTuning() {
 export const inject = ['webServer']
 
 /**
- * 注册 `/dsh-preset-menu/config`，每次请求都重新读文件，改完即生效。
+ * 读请求体并解析 JSON（上限 16 KiB）。
+ * @param req - Node 请求对象。
+ * @returns 解析后的对象。
+ */
+async function readJsonBody(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > 16 * 1024) throw new Error('请求体过大')
+    chunks.push(chunk)
+  }
+  if (size === 0) throw new Error('请求体为空')
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
+/**
+ * 统一发一个 JSON 响应。
+ * @param res - Node 响应对象。
+ * @param status - HTTP 状态码。
+ * @param value - 可 JSON 序列化的响应体。
+ */
+function sendJson(res, status, value) {
+  const body = JSON.stringify(value)
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+  })
+  res.end(body)
+}
+
+/**
+ * 注册 `/dsh-preset-menu/config`：GET 读当前值，POST 写回，两边都会夹紧越界数字。
  * @param ctx - 宿主插件上下文。
  */
 export function apply(ctx) {
@@ -80,21 +136,27 @@ export function apply(ctx) {
     path: ROUTE_PREFIX,
     handler: async (req, res) => {
       if (req.url !== `${ROUTE_PREFIX}/config`) {
-        res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: false, message: 'not found' }))
+        sendJson(res, 404, { ok: false, message: 'not found' })
         return
       }
-      const body = JSON.stringify(await readTuning())
-      res.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': Buffer.byteLength(body),
-        'cache-control': 'no-store',
-      })
-      res.end(body)
+      try {
+        if (req.method === 'GET') {
+          sendJson(res, 200, await readTuning())
+          return
+        }
+        if (req.method === 'POST') {
+          const saved = await writeTuning(await readJsonBody(req))
+          sendJson(res, 200, saved)
+          return
+        }
+        sendJson(res, 405, { ok: false, message: 'method not allowed' })
+      } catch (error) {
+        sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) })
+      }
     },
   })
   ctx.effect(() => dispose)
 }
 
 /** 测试接缝：区间与默认值的直接出口（Loader 不读它）。 */
-export const __test = { DEFAULTS, LIMITS, clampField, ROUTE_PREFIX }
+export const __test = { DEFAULTS, LIMITS, clampField, normalize, ROUTE_PREFIX }

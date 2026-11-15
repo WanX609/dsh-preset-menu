@@ -30,7 +30,10 @@
 
 window.__ModuleLoader__.load({
   id: 'dsh-preset-menu',
-  factory: () => {
+  factory: (require) => {
+    const React = require('react')
+    const h = React.createElement
+
     const STYLE_ID = 'dsh-preset-menu-style'
     const PANEL_CLASS = 'dspm-panel'
     const LIST_CLASS = 'dspm-list'
@@ -45,6 +48,26 @@ window.__ModuleLoader__.load({
     const tuning = { ...DEFAULTS }
     /** 宿主提供参数的同源路由。 */
     const CONFIG_PATH = '/dsh-preset-menu/config'
+
+    /**
+     * 把一组值写回宿主（设置页保存按钮走这里）。
+     * @param values - 四项几何参数。
+     * @returns 宿主夹紧后真正落盘的值。
+     */
+    async function saveTuning(values) {
+      const response = await fetch(CONFIG_PATH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+      const body = await response.json().catch(() => undefined)
+      if (!response.ok) throw new Error(body?.message ?? `HTTP ${response.status}`)
+      for (const name of Object.keys(DEFAULTS)) {
+        const value = Number(body?.[name])
+        if (Number.isFinite(value)) tuning[name] = value
+      }
+      return { ...tuning }
+    }
 
     /**
      * 从宿主取最新的几何参数（宿主每次请求都重读 preset-menu.json）。
@@ -506,6 +529,146 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 设置页里的一行：左侧标题与说明，右侧数字输入。 */
+    const FIELDS = Object.freeze([
+      { key: 'bottomInset', title: '底部留白', hint: '面板底边距窗口下沿的像素。越小，弹窗向下伸得越低。', min: 0, max: 200 },
+      { key: 'sideGap', title: '与按钮的间距', hint: '弹窗与模式按钮之间的距离。', min: 0, max: 64 },
+      { key: 'panelWidth', title: '面板宽度', hint: '名称与描述换行后的舒适宽度。', min: 220, max: 900 },
+      { key: 'minSpace', title: '上浮阈值', hint: '按钮下方不足这个高度时，改为向上展开。', min: 0, max: 800 },
+    ])
+
+    /** 设置页用到的主题取色（都带 fallback，明暗主题都跟着走）。 */
+    const SKIN = Object.freeze({
+      label: 'var(--dsw-alias-label-primary, #1f2329)',
+      dim: 'var(--dsw-alias-label-secondary, #6b7280)',
+      faint: 'var(--dsw-alias-label-tertiary, #9aa1ab)',
+      border: 'var(--dsw-alias-border-l2, #e4e7ec)',
+      field: 'var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #ffffff))',
+      accent: 'var(--dsw-alias-brand-primary, #4d6bfe)',
+      error: 'var(--dsw-alias-state-error-primary, #e5484d)',
+      ok: 'var(--dsw-alias-state-success-primary, #30a46c)',
+    })
+
+    /** 数字输入框。 */
+    function NumberField({ field, value, disabled, onChange }) {
+      return h('div', {
+        style: { display: 'flex', alignItems: 'flex-start', gap: 16, padding: '12px 0', borderTop: `0.5px solid ${SKIN.border}` },
+      }, [
+        h('div', { key: 'text', style: { flex: '1 1 auto', minWidth: 0 } }, [
+          h('div', { key: 'title', style: { fontSize: 13, lineHeight: '20px', fontWeight: 500, color: SKIN.label } }, field.title),
+          h('div', { key: 'hint', style: { fontSize: 12, lineHeight: '17px', color: SKIN.dim, marginTop: 2 } }, field.hint),
+        ]),
+        h('div', { key: 'input', style: { display: 'flex', alignItems: 'center', gap: 6, flex: 'none' } }, [
+          h('input', {
+            key: 'value',
+            type: 'number',
+            min: field.min,
+            max: field.max,
+            step: 1,
+            value: value ?? '',
+            disabled,
+            onChange: (event) => onChange(field.key, event.target.value),
+            style: {
+              width: 88, padding: '5px 8px', fontSize: 13, lineHeight: '20px', textAlign: 'right',
+              color: SKIN.label, background: SKIN.field,
+              border: `0.5px solid ${SKIN.border}`, borderRadius: 8,
+              outline: 'none', fontFamily: 'inherit',
+            },
+          }),
+          h('span', { key: 'unit', style: { fontSize: 12, color: SKIN.faint, width: 18 } }, 'px'),
+        ]),
+      ])
+    }
+
+    /** 设置页里「Agent 模式弹窗」这一页。 */
+    function PresetMenuSection() {
+      const [draft, setDraft] = React.useState(null)
+      const [status, setStatus] = React.useState('')
+      const [error, setError] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+
+      React.useEffect(() => {
+        let alive = true
+        void refreshTuning().then((values) => { if (alive) setDraft({ ...values }) })
+        return () => { alive = false }
+      }, [])
+
+      const commit = async (values) => {
+        setBusy(true)
+        setStatus('')
+        setError('')
+        try {
+          setDraft({ ...await saveTuning(values) })
+          setStatus('已保存，下次点开模式菜单即生效')
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : String(failure))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const buttonStyle = (primary) => ({
+        padding: '6px 14px', fontSize: 13, lineHeight: '20px', borderRadius: 8, cursor: busy ? 'default' : 'pointer',
+        border: primary ? 'none' : `0.5px solid ${SKIN.border}`,
+        // 主按钮走「反色」：label-primary 作底、bg-base 作字，和 DSH 自己的主按钮一致，
+        // 明暗主题都有对比（品牌色在部分主题里会解析成浅色，白字会看不见）。
+        background: primary ? 'var(--dsw-alias-label-primary, #1f2329)' : 'transparent',
+        color: primary ? 'var(--dsw-alias-bg-base, #ffffff)' : SKIN.label,
+        opacity: busy ? 0.6 : 1,
+        fontFamily: 'inherit',
+      })
+
+      const note = error !== ''
+        ? h('span', { key: 'note', style: { fontSize: 12, color: SKIN.error } }, error)
+        : status !== ''
+          ? h('span', { key: 'note', style: { fontSize: 12, color: SKIN.ok } }, status)
+          : h('span', { key: 'note', style: { fontSize: 12, color: SKIN.faint } }, '这组数字决定弹窗往下伸多低、多宽、与按钮的间距。')
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', fontFamily: 'inherit' } }, [
+        h('div', { key: 'intro', style: { fontSize: 13, lineHeight: '20px', color: SKIN.dim, marginBottom: 4 } },
+          '调整新建任务页「Agent 模式」弹窗的位置与尺寸；保存后会写回插件目录下的 preset-menu.json。'),
+        ...FIELDS.map((field) => h(NumberField, {
+          key: field.key,
+          field,
+          value: draft === null ? '' : draft[field.key],
+          disabled: busy || draft === null,
+          onChange: (key, text) => setDraft((current) => (current === null ? current : { ...current, [key]: text })),
+        })),
+        h('div', { key: 'footer', style: { display: 'flex', alignItems: 'center', gap: 12, paddingTop: 16, marginTop: 4, borderTop: `0.5px solid ${SKIN.border}` } }, [
+          h('button', { key: 'save', type: 'button', disabled: busy || draft === null, style: buttonStyle(true), onClick: () => { void commit(draft) } }, '保存'),
+          h('button', {
+            key: 'reset',
+            type: 'button',
+            disabled: busy || draft === null,
+            style: buttonStyle(false),
+            onClick: () => { void commit(DEFAULTS) },
+          }, '恢复默认'),
+          h('span', { key: 'spacer', style: { flex: '1 1 auto' } }),
+          note,
+        ]),
+      ])
+    }
+
+    /**
+     * 把设置页挂进「设置」侧栏；拿不到插槽服务时安静跳过。
+     * @param ctx - 浏览器半区插件上下文。
+     */
+    function mountSettingsSection(ctx) {
+      try {
+        const slots = ctx.get?.('slots')
+        if (slots === undefined || typeof slots.inject !== 'function') return
+        const dispose = slots.inject('settings.section', () => slots.register({
+          name: 'settings.section',
+          id: 'dsh-preset-menu',
+          order: 34,
+          label: '模式弹窗',
+        }, PresetMenuSection))
+        if (typeof dispose === 'function') ctx.effect(() => dispose)
+      } catch {
+        // 设置面板不可用时不影响弹窗本身。
+      }
+    }
+
     /**
      * 注入样式表并启动监听。
      * @param ctx - 浏览器半区插件上下文。
@@ -526,6 +689,7 @@ window.__ModuleLoader__.load({
           style.remove()
         }
       }, 'dsh-preset-menu: agent-mode menu placement and rows')
+      mountSettingsSection(ctx)
     }
 
     return { name: 'dsh-preset-menu', inject: [], apply }
